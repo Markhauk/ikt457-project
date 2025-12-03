@@ -6,6 +6,8 @@ def run_hex_once() -> str:
     exe_path = Path(__file__).parent / "hex" / "hex.exe"
 
     result = subprocess.run(
+
+
         [str(exe_path)],
         capture_output=True,
         text=True,
