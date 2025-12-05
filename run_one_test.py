@@ -5,22 +5,13 @@ from GraphTsetlinMachine.graphs import Graphs
 from GraphTsetlinMachine.tm import MultiClassGraphTsetlinMachine
 from tqdm import tqdm
 
-# ============================================================
-#  CONFIG
-# ============================================================
 
-BOARD_DIM = 5                # <-- must match hex.c
-EXE_PATH = "hex/hex"         # path to C executable
-NUM_GAMES = 10000             # how many games to simulate
-N_EPOCHS = 5                # training epochs
-N_CLAUSES = 400              # capacity (you can increase)
-T_VALUE = 15                 # threshold
-S_VALUE = (5.0, 5.0)         # sensitivity per class
-DEPTH = 2                    # <== uses edges (important!)
+BOARD_DIM = 5               
+EXE_PATH = "hex/hex"         
+NUM_GAMES = 100000          
+N_EPOCHS = 5                
 
-# ============================================================
 #  NEIGHBORS & GRAPH BUILDING
-# ============================================================
 
 def neighbors(idx: int):
     """Hex neighbors on a BOARD_DIM x BOARD_DIM board for a cell index 0..N-1."""
@@ -95,9 +86,9 @@ def node_type_name(r: int, c: int) -> str:
     if on_left:   return "Left"
     if on_right:  return "Right"
     return "Middle"
-# ============================================================
+
+
 #  C INTERFACE
-# ============================================================
 
 def load_final_from_c(exe_path: str, num_games: int):
     """
@@ -157,12 +148,12 @@ def load_final_from_c(exe_path: str, num_games: int):
     y = np.array(winners, dtype=np.uint32)
     return boards, y
 
-# ============================================================
+
 #  MAIN (DEBUG / WEIGHTED TRAINING)
-# ============================================================
+
 
 if __name__ == "__main__":
-    print("Running C simulator and loading 3x3 final positions...")
+    print("Running C simulator and loading x x final positions...")
     boards, y = load_final_from_c(EXE_PATH, NUM_GAMES)
     print("Loaded:", boards.shape, "labels:", np.bincount(y))
 
@@ -185,11 +176,9 @@ if __name__ == "__main__":
 
     print("Balanced:", boards_bal.shape, np.bincount(y_bal))
 
-    # ====================================================
     #  CHOOSE WHAT LABELS TO TRAIN ON
     #    "winner"        -> original C-simulator winners
     #    "center_black"  -> 1 if center cell == 1 (black), else 0
-    # ====================================================
     LABEL_MODE = "center_black"   # <-- try "winner" later
 
     if LABEL_MODE == "center_black":
@@ -223,15 +212,26 @@ if __name__ == "__main__":
 
     # --- init GTM (with depth=2 for edges) ---
     tm = MultiClassGraphTsetlinMachine(
-        number_of_clauses=100,   # you can try 400 or 800 later
-        T=15,                    # not too high for small 3x3
-        s=5.0,                   # use scalar s (simpler & safe)
-        depth=2,                 # use edges + nodes
+        number_of_clauses=600,   
+        T=5,                    
+        s=5.0,                   
+        depth=2,                 
         q=1.0,
         message_size=64,
-        grid=(32, 1, 1),
-        block=(64, 1, 1),
+        grid=(16*13, 1, 1),
+        block=(128, 1, 1),
     )
+    try:
+        backend = tm.get_backend()
+        if backend == 1:
+            device = "GPU (CUDA)"
+        else:
+            device = "CPU"
+    except:
+        device = "CPU"
+    
+    print(f"\nInitialized TM — Running on: {device}")
+
     print("\nInitialization of sparse structure.")
     print("Training...")
 

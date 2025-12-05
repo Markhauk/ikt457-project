@@ -1,0 +1,7 @@
+BOARD_DIM: 7
+NUM_GAMES: 400000
+MOVES_BACK: 2
+test_ratio: 0.1
+Total: 400000, class_counts: [217328 182672]
+Train: 360000, class_counts: [195595 164405]
+Test:  40000, class_counts: [21733 18267]
