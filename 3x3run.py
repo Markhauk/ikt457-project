@@ -25,17 +25,17 @@ USE_TEST_SAMPLES = 800
 
 # epochs per dataset
 EPOCHS = {
-    "final": 5,
-    "mb2":   5,
-    "mb5":   5,
+    "final": 20,
+    "mb2":   20,
+    "mb5":   20,
 }
 
 # separate TM configs per dataset
 TM_CONFIGS = {
     "final": {
-        "number_of_clauses": 400,
-        "T": 1,
-        "s": 1.0,
+        "number_of_clauses": 80,
+        "T": 50,
+        "s": 1.5,
         "depth": 1,
         "q": 1.0,
         "message_size": 64,
@@ -43,9 +43,9 @@ TM_CONFIGS = {
         "block": (128, 1, 1),
     },
     "mb2": {
-        "number_of_clauses": 1200,
-        "T": 20,
-        "s": 1.0,
+        "number_of_clauses": 100,
+        "T": 80,
+        "s": 2.0,
         "depth": 1,
         "q": 1.0,
         "message_size": 64,
@@ -53,10 +53,10 @@ TM_CONFIGS = {
         "block": (128, 1, 1),
     },
     "mb5": {
-        "number_of_clauses": 1200,
-        "T": 300,
-        "s": 1.0,
-        "depth": 2,
+        "number_of_clauses": 120,
+        "T": 90,
+        "s": 5,
+        "depth": 1,
         "q": 1.0,
         "message_size": 64,
         "grid": (16 * 13, 1, 1),
@@ -240,5 +240,5 @@ def run_for_dataset(tag: str):
 # main
 
 if __name__ == "__main__":
-    for tag in ["final"]:
+    for tag in [ "final","mb2","mb5"]:
         run_for_dataset(tag)
