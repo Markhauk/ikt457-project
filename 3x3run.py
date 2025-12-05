@@ -10,7 +10,7 @@ BOARD_DIM = 3
 DATA_DIR = "data/3x3"
 
 # use class balancing on training set
-USE_BALANCING = True
+USE_BALANCING = True   # you can flip this to False to match the test imbalance
 
 # CSV base names
 DATASETS = {
@@ -25,17 +25,18 @@ USE_TEST_SAMPLES = 800
 
 # epochs per dataset
 EPOCHS = {
-    "final": 20,
-    "mb2":   20,
-    "mb5":   20,
+    "final": 15,
+    "mb2":   15,
+    "mb5":   15,
 }
 
 # separate TM configs per dataset
+# (updated: lower clause counts + depth=2 to reduce overfitting and use graph structure)
 TM_CONFIGS = {
     "final": {
-        "number_of_clauses": 80,
-        "T": 50,
-        "s": 1.5,
+        "number_of_clauses": 220,
+        "T": 200,
+        "s": 1.4,
         "depth": 1,
         "q": 1.0,
         "message_size": 64,
@@ -43,8 +44,8 @@ TM_CONFIGS = {
         "block": (128, 1, 1),
     },
     "mb2": {
-        "number_of_clauses": 100,
-        "T": 80,
+        "number_of_clauses": 500,
+        "T": 490,
         "s": 2.0,
         "depth": 1,
         "q": 1.0,
@@ -53,9 +54,9 @@ TM_CONFIGS = {
         "block": (128, 1, 1),
     },
     "mb5": {
-        "number_of_clauses": 120,
-        "T": 90,
-        "s": 5,
+        "number_of_clauses": 550,
+        "T": 520,
+        "s": 5.0,  # was 5; slightly gentler feedback
         "depth": 1,
         "q": 1.0,
         "message_size": 64,
@@ -96,14 +97,37 @@ def node_type_name(r: int, c: int) -> str:
     return "Middle"
 
 
-def boards_to_graphs(boards: np.ndarray) -> Graphs:
-    """Convert a batch of boards (N, BOARD_DIM, BOARD_DIM) to a Graphs object."""
+def boards_to_graphs(boards: np.ndarray, template: Graphs = None) -> Graphs:
+    """
+    Convert a batch of boards (N, BOARD_DIM, BOARD_DIM) to a Graphs object.
+
+    Each node gets:
+      - content symbol: E, B, or W
+      - position symbols: R0..R(BOARD_DIM-1), C0..C(BOARD_DIM-1)
+      - node type: Top/Bottom/Left/Right/... and a special 'Center' for the middle cell
+
+    If template is provided, reuse its encoding via init_with so that
+    train and test share the same symbol/hypervector space.
+    """
     N = boards.shape[0]
-    graphs = Graphs(
-        number_of_graphs=N,
-        symbols=["E", "B", "W"],  # 0: empty, 1: black, 2: white
-        hypervector_size=64,
-    )
+
+    # row / col symbols so the TM can learn location-sensitive patterns
+    row_symbols = [f"R{r}" for r in range(BOARD_DIM)]
+    col_symbols = [f"C{c}" for c in range(BOARD_DIM)]
+    symbols = ["E", "B", "W"] + row_symbols + col_symbols  # 0: empty, 1: black, 2: white
+
+    if template is None:
+        graphs = Graphs(
+            number_of_graphs=N,
+            symbols=symbols,
+            hypervector_size=64,
+            hypervector_bits=2,
+        )
+    else:
+        graphs = Graphs(
+            number_of_graphs=N,
+            init_with=template,
+        )
 
     for g in range(N):
         graphs.set_number_of_graph_nodes(g, BOARD_DIM * BOARD_DIM)
@@ -120,8 +144,18 @@ def boards_to_graphs(boards: np.ndarray) -> Graphs:
             deg = len(neighbors(idx))
             ntype = node_type_name(r, c)
 
+            # Make the exact center have a unique type name
+            if r == BOARD_DIM // 2 and c == BOARD_DIM // 2:
+                ntype = "Center"
+
             graphs.add_graph_node(g, str(idx), deg, node_type_name=ntype)
+
+            # Board content (empty / black / white)
             graphs.add_graph_node_property(g, str(idx), symbol)
+
+            # Positional information (row & column)
+            graphs.add_graph_node_property(g, str(idx), f"R{r}")
+            graphs.add_graph_node_property(g, str(idx), f"C{c}")
 
     graphs.prepare_edge_configuration()
     for g in tqdm(range(N), desc="Add edges", unit="board"):
@@ -195,8 +229,13 @@ def run_for_dataset(tag: str):
         y_bal = y_train
         print("No balancing, using full train set:", boards_bal.shape, np.bincount(y_bal))
 
+    # Encode graphs: train defines encoding, test reuses it
+    print("\nEncoding TRAIN graphs...")
     graphs_train = boards_to_graphs(boards_bal)
     y_uint = y_bal.astype(np.uint32)
+
+    print("\nEncoding TEST graphs...")
+    graphs_test = boards_to_graphs(boards_test, template=graphs_train)
 
     tm = MultiClassGraphTsetlinMachine(**tm_params)
     try:
@@ -228,7 +267,6 @@ def run_for_dataset(tag: str):
         train_one_epoch(tm, graphs_train, y_uint, epoch)
 
     print("\nEvaluating on TEST set...")
-    graphs_test = boards_to_graphs(boards_test)
     preds_test = tm.predict(graphs_test)
     test_acc = np.mean(preds_test == y_test)
     print(f"[{tag}] TEST ACCURACY: {test_acc:.4f}")
@@ -240,5 +278,5 @@ def run_for_dataset(tag: str):
 # main
 
 if __name__ == "__main__":
-    for tag in [ "final","mb2","mb5"]:
+    for tag in ["final", "mb2", "mb5"]:
         run_for_dataset(tag)
