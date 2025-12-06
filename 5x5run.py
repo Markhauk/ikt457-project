@@ -17,8 +17,8 @@ DATASETS = {
 }
 
 # limit how many samples to use (set to None to use all)
-USE_TRAIN_SAMPLES = 90000
-USE_TEST_SAMPLES = 10000
+USE_TRAIN_SAMPLES = 18000
+USE_TEST_SAMPLES = 2000
 
 # epochs per dataset
 EPOCHS = {
@@ -30,37 +30,36 @@ EPOCHS = {
 # separate TM configs per dataset
 TM_CONFIGS = {
     "final": {
-        "number_of_clauses": 6000,
-        "T": 1500,
-        "s": 1.0,
+        "number_of_clauses": 2800,
+        "T": 2650,
+        "s": 1.8,
+        "depth": 1,
+        "q": 1,
+        "message_size": 64,
+        "grid": (16 * 13, 1, 1),
+        "block": (128, 1, 1),
+    },
+    "mb2": {
+        "number_of_clauses": 3200,
+        "T": 3113,
+        "s": 2.58,
         "depth": 1,
         "q": 1.0,
         "message_size": 64,
         "grid": (16 * 13, 1, 1),
         "block": (128, 1, 1),
     },
-    "mb2": {
-        "number_of_clauses": 1200,
-        "T": 150,
-        "s": 9.0,
-        "depth": 2,
-        "q": 1.0,
-        "message_size": 64,
-        "grid": (16 * 13, 1, 1),
-        "block": (128, 1, 1),
-    },
     "mb5": {
-        "number_of_clauses": 1200,
-        "T": 150,
-        "s": 10.0,
-        "depth": 2,
+        "number_of_clauses": 3710,
+        "T": 3706,
+        "s": 2.64,
+        "depth": 1,
         "q": 1.0,
         "message_size": 64,
         "grid": (16 * 13, 1, 1),
         "block": (128, 1, 1),
     },
 }
-
 
 # neighbors & graph building
 
@@ -93,14 +92,35 @@ def node_type_name(r: int, c: int) -> str:
     return "Middle"
 
 
-def boards_to_graphs(boards: np.ndarray) -> Graphs:
-    """Convert a batch of boards (N, BOARD_DIM, BOARD_DIM) to a Graphs object."""
+def boards_to_graphs(boards: np.ndarray, template: Graphs = None) -> Graphs:
+    """
+    Convert a batch of boards (N, BOARD_DIM, BOARD_DIM) to a Graphs object.
+
+    If template is None:
+        - Create a new Graphs object and random hypervectors for symbols.
+    If template is provided:
+        - Reuse template's encoding via init_with so train and test share
+          symbol_id / edge_type_id / hypervectors.
+    """
     N = boards.shape[0]
-    graphs = Graphs(
-        number_of_graphs=N,
-        symbols=["E", "B", "W"],  # 0: empty, 1: black, 2: white
-        hypervector_size=64,
-    )
+
+    # content + positional symbols
+    row_symbols = [f"R{r}" for r in range(BOARD_DIM)]
+    col_symbols = [f"C{c}" for c in range(BOARD_DIM)]
+    symbols = ["E", "B", "W"] + row_symbols + col_symbols
+
+    if template is None:
+        graphs = Graphs(
+            number_of_graphs=N,
+            symbols=symbols,
+            hypervector_size=64,
+            hypervector_bits=2,
+        )
+    else:
+        graphs = Graphs(
+            number_of_graphs=N,
+            init_with=template,
+        )
 
     for g in range(N):
         graphs.set_number_of_graph_nodes(g, BOARD_DIM * BOARD_DIM)
@@ -117,8 +137,16 @@ def boards_to_graphs(boards: np.ndarray) -> Graphs:
             deg = len(neighbors(idx))
             ntype = node_type_name(r, c)
 
+            # Give exact center a unique type name
+            if r == BOARD_DIM // 2 and c == BOARD_DIM // 2:
+                ntype = "Center"
+
             graphs.add_graph_node(g, str(idx), deg, node_type_name=ntype)
+            # content
             graphs.add_graph_node_property(g, str(idx), symbol)
+            # position
+            graphs.add_graph_node_property(g, str(idx), f"R{r}")
+            graphs.add_graph_node_property(g, str(idx), f"C{c}")
 
     graphs.prepare_edge_configuration()
     for g in tqdm(range(N), desc="Add edges", unit="board"):
@@ -188,8 +216,13 @@ def run_for_dataset(tag: str):
 
     print("Balanced train:", boards_bal.shape, np.bincount(y_bal))
 
+    # encode graphs: train defines encoding, test reuses it
+    print("\nEncoding TRAIN graphs...")
     graphs_train = boards_to_graphs(boards_bal)
     y_uint = y_bal.astype(np.uint32)
+
+    print("\nEncoding TEST graphs...")
+    graphs_test = boards_to_graphs(boards_test, template=graphs_train)
 
     tm = MultiClassGraphTsetlinMachine(**tm_params)
     try:
@@ -207,19 +240,6 @@ def run_for_dataset(tag: str):
             preds = tm.predict(graphs)
             acc = np.mean(preds == y_uint)
             print(f"Epoch {epoch:02d} accuracy: {acc:.4f}")
-#========================================================
-#            print("\nInspecting clause outputs for 3 samples...")
-#            X_clause, class_sums = tm.transform(graphs)
-#            print("  transformed_X shape:", X_clause.shape)
-#            print("  class_sums shape:", class_sums.shape)
-#
-#            for i in range(3):
-#                print(
-#                    f"Sample {i}, true_label={y_uint[i]}, "
-#                    f"class_sum={class_sums[i]}"
-#                )
-#                print("  clause outputs (first 40):", X_clause[i, :40])
-#===========================================================================        
         else:
             w_before = tm.get_weights().copy()
             tm.fit(graphs, y_uint, epochs=1, incremental=True)
@@ -234,7 +254,6 @@ def run_for_dataset(tag: str):
         train_one_epoch(tm, graphs_train, y_uint, epoch)
 
     print("\nEvaluating on TEST set...")
-    graphs_test = boards_to_graphs(boards_test)
     preds_test = tm.predict(graphs_test)
     test_acc = np.mean(preds_test == y_test)
     print(f"[{tag}] TEST ACCURACY: {test_acc:.4f}")
@@ -246,5 +265,5 @@ def run_for_dataset(tag: str):
 # main
 
 if __name__ == "__main__":
-    for tag in ["final", "mb2", "mb5"]:
+   for tag in ["final", "mb2", "mb5"]:
         run_for_dataset(tag)
