@@ -6,7 +6,7 @@ from GraphTsetlinMachine.tm import MultiClassGraphTsetlinMachine
 
 # global config
 
-BOARD_DIM = 5
+BOARD_DIM = 7
 DATA_DIR = "data/7x7"
 
 # CSV base names
@@ -17,8 +17,8 @@ DATASETS = {
 }
 
 # limit how many samples to use (set to None to use all)
-USE_TRAIN_SAMPLES = 200000
-USE_TEST_SAMPLES = 20000
+USE_TRAIN_SAMPLES = 90000
+USE_TEST_SAMPLES = 10000
 
 # epochs per dataset
 EPOCHS = {
@@ -93,14 +93,37 @@ def node_type_name(r: int, c: int) -> str:
     return "Middle"
 
 
-def boards_to_graphs(boards: np.ndarray) -> Graphs:
-    """Convert a batch of boards (N, BOARD_DIM, BOARD_DIM) to a Graphs object."""
+def boards_to_graphs(boards: np.ndarray, template: Graphs = None) -> Graphs:
+    """
+    Convert a batch of boards (N, BOARD_DIM, BOARD_DIM) to a Graphs object.
+
+    Each node gets:
+      - content symbol: E, B, or W
+      - position symbols: R0..R(BOARD_DIM-1), C0..C(BOARD_DIM-1)
+      - node type: Top/Bottom/Left/Right/... and a special 'Center' for the middle cell
+
+    If template is provided, reuse its encoding via init_with so that
+    train and test share the same symbol/hypervector space.
+    """
     N = boards.shape[0]
-    graphs = Graphs(
-        number_of_graphs=N,
-        symbols=["E", "B", "W"],  # 0: empty, 1: black, 2: white
-        hypervector_size=64,
-    )
+
+    # row / col symbols so the TM can learn location-sensitive patterns
+    row_symbols = [f"R{r}" for r in range(BOARD_DIM)]
+    col_symbols = [f"C{c}" for c in range(BOARD_DIM)]
+    symbols = ["E", "B", "W"] + row_symbols + col_symbols  # 0: empty, 1: black, 2: white
+
+    if template is None:
+        graphs = Graphs(
+            number_of_graphs=N,
+            symbols=symbols,
+            hypervector_size=64,
+            hypervector_bits=2,
+        )
+    else:
+        graphs = Graphs(
+            number_of_graphs=N,
+            init_with=template,
+        )
 
     for g in range(N):
         graphs.set_number_of_graph_nodes(g, BOARD_DIM * BOARD_DIM)
@@ -117,8 +140,18 @@ def boards_to_graphs(boards: np.ndarray) -> Graphs:
             deg = len(neighbors(idx))
             ntype = node_type_name(r, c)
 
+            # Make the exact center have a unique type name
+            if r == BOARD_DIM // 2 and c == BOARD_DIM // 2:
+                ntype = "Center"
+
             graphs.add_graph_node(g, str(idx), deg, node_type_name=ntype)
+
+            # Board content (empty / black / white)
             graphs.add_graph_node_property(g, str(idx), symbol)
+
+            # Positional information (row & column)
+            graphs.add_graph_node_property(g, str(idx), f"R{r}")
+            graphs.add_graph_node_property(g, str(idx), f"C{c}")
 
     graphs.prepare_edge_configuration()
     for g in tqdm(range(N), desc="Add edges", unit="board"):
@@ -188,8 +221,13 @@ def run_for_dataset(tag: str):
 
     print("Balanced train:", boards_bal.shape, np.bincount(y_bal))
 
+    # Encode graphs: train defines encoding, test reuses it
+    print("\nEncoding TRAIN graphs...")
     graphs_train = boards_to_graphs(boards_bal)
     y_uint = y_bal.astype(np.uint32)
+
+    print("\nEncoding TEST graphs...")
+    graphs_test = boards_to_graphs(boards_test, template=graphs_train)
 
     tm = MultiClassGraphTsetlinMachine(**tm_params)
     try:
@@ -207,19 +245,6 @@ def run_for_dataset(tag: str):
             preds = tm.predict(graphs)
             acc = np.mean(preds == y_uint)
             print(f"Epoch {epoch:02d} accuracy: {acc:.4f}")
-#========================================================
-#            print("\nInspecting clause outputs for 3 samples...")
-#            X_clause, class_sums = tm.transform(graphs)
-#            print("  transformed_X shape:", X_clause.shape)
-#            print("  class_sums shape:", class_sums.shape)
-#
-#            for i in range(3):
-#                print(
-#                    f"Sample {i}, true_label={y_uint[i]}, "
-#                    f"class_sum={class_sums[i]}"
-#                )
-#                print("  clause outputs (first 40):", X_clause[i, :40])
-#===========================================================================        
         else:
             w_before = tm.get_weights().copy()
             tm.fit(graphs, y_uint, epochs=1, incremental=True)
@@ -234,7 +259,6 @@ def run_for_dataset(tag: str):
         train_one_epoch(tm, graphs_train, y_uint, epoch)
 
     print("\nEvaluating on TEST set...")
-    graphs_test = boards_to_graphs(boards_test)
     preds_test = tm.predict(graphs_test)
     test_acc = np.mean(preds_test == y_test)
     print(f"[{tag}] TEST ACCURACY: {test_acc:.4f}")
